@@ -59,3 +59,4 @@ How to push & create PR (if you haven’t already added a remote):
    gh pr create --fill --title "chore: add CLI, logging, metrics, tests & CI"
    ```
 
+If you want, I can push the branch and open the PR for you — provide the repo remote URL or grant permission to add it and I’ll handle the push + PR creation. ✨
