@@ -1,0 +1,35 @@
+[package]
+name = "apex_searcher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.3.0", features = ["full"] }
+# Runtime and helper crates
+tokio = { version = "1.49.0", features = ["rt", "macros"] }
+futures-util = "0.3"
+eyre = "0.6"
+# Expose sol types/traits used by the sol! macro
+alloy-sol-types = "1.5"
+
+# Hex encoding/decoding helper for topics
+hex = "0.4"
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# CLI / config helpers
+clap = { version = "4.2", features = ["derive"] }
+
+# Optional: metrics exposition
+prometheus = "0.14"
+axum = "0.7"
+hyper = { version = "0.14", features = ["server", "http1", "http2", "tcp"] }
+tiny_http = "0.12"
+
+# Keccak hashing for event signatures
+tiny-keccak = "2.0"
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
