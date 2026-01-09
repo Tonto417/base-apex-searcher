@@ -38,6 +38,126 @@ pub fn decode_signature() -> eyre::Result<[u8; 32]> {
     Ok(out)
 }
 
+// Expose backoff helpers for reuse and testing
+pub mod backoff;
+
+use futures_util::StreamExt;
+
+/// Public test helper to run a reconnection loop using an abstract subscribe operation.
+/// This is intentionally public so integration tests can call it. It is generic over
+/// the subscribe operation and stream item types to support mocks.
+pub async fn run_loop_with_subscribe_op<F, Fut, S, T, E, Proc>(
+    mut subscribe_op: F,
+    mut process_item: Proc,
+    base_backoff: std::time::Duration,
+    max_backoff: std::time::Duration,
+    jitter_pct: u8,
+    max_subscribe_attempts: Option<u32>,
+) -> eyre::Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<S, E>>,
+    S: futures_util::stream::Stream<Item = Result<T, E>> + Send + 'static + Unpin,
+    Proc: FnMut(T) + Send + 'static,
+    E: std::fmt::Debug,
+{
+    loop {
+        // Try to subscribe with backoff
+        let sub_res = crate::backoff::retry_async_with_backoff(
+            || subscribe_op(),
+            base_backoff,
+            max_backoff,
+            jitter_pct,
+            max_subscribe_attempts,
+        )
+        .await;
+
+        let mut stream = match sub_res {
+            Ok(s) => s,
+            Err(_) => {
+                // Exhausted subscribe attempts
+                return Err(eyre::eyre!("subscribe failed after retries"));
+            }
+        };
+
+        // Process the stream until it ends or yields an error
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(t) => process_item(t),
+                Err(_e) => {
+                    // Treat item errors as decode failures; stop processing and reconnect
+                    break;
+                }
+            }
+        }
+
+        // Continue the reconnection loop
+    }
+}
+
+/// Lightweight provider trait used for testing. Implement this for mock providers
+/// to exercise `run_loop_with_provider_factory` in an integration style test.
+pub trait ProviderLike {
+    type Item;
+    type Error: std::fmt::Debug;
+    type Stream: futures_util::stream::Stream<Item = Result<Self::Item, Self::Error>> + Send + Unpin + 'static;
+
+    fn subscribe_logs(&self) -> Result<Self::Stream, Self::Error>;
+}
+
+/// Run a reconnection loop that obtains providers via `factory` (async), calls
+/// `subscribe_logs` on the provider, and processes items with `process_item`.
+/// This is useful to test `main`-style logic with an injected mock provider.
+pub async fn run_loop_with_provider_factory<F, Fut, P, Proc>(
+    mut factory: F,
+    mut process_item: Proc,
+    base_backoff: std::time::Duration,
+    max_backoff: std::time::Duration,
+    jitter_pct: u8,
+    max_subscribe_attempts: Option<u32>,
+) -> eyre::Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<P, ()>>,
+    P: ProviderLike,
+    Proc: FnMut(P::Item) + Send + 'static,
+{
+    loop {
+        // Try to obtain a provider with retry/backoff
+        let prov_res = crate::backoff::retry_async_with_backoff(
+            || factory(),
+            base_backoff,
+            max_backoff,
+            jitter_pct,
+            max_subscribe_attempts,
+        )
+        .await;
+
+        let provider = match prov_res {
+            Ok(p) => p,
+            Err(_) => return Err(eyre::eyre!("failed to obtain provider after retries")),
+        };
+
+        // Now subscribe via the provider
+        let sub_res = provider.subscribe_logs();
+        let mut stream = match sub_res {
+            Ok(s) => s,
+            Err(_) => {
+                // subscription failed; reconnect
+                continue;
+            }
+        };
+
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(t) => process_item(t),
+                Err(_) => break, // decode error -> reconnect
+            }
+        }
+
+        // continue loop and reconnect
+    }
+}
 pub fn build_filter() -> eyre::Result<Filter> {
     let sig_arr = decode_signature()?;
     Ok(Filter::new().event_signature(sig_arr))
@@ -110,4 +230,46 @@ pub fn init_metrics(addr: Option<SocketAddr>) -> Option<(IntCounter, HistogramVe
 #[cfg(test)]
 pub fn init_metrics(_addr: Option<SocketAddr>) -> Option<(IntCounter, HistogramVec)> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prometheus::{IntCounter, HistogramOpts, HistogramVec};
+
+    #[test]
+    fn test_compute_shadow_price_nonzero() {
+        let p = compute_shadow_price(10u128, 25u128);
+        assert!(p.is_some());
+        let v = p.unwrap();
+        assert!((v - 2.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_compute_shadow_price_zero() {
+        let p = compute_shadow_price(0u128, 100u128);
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn test_decode_signature_len() {
+        let sig = decode_signature().expect("decode_signature should succeed");
+        assert_eq!(sig.len(), 32);
+    }
+
+    #[test]
+    fn test_build_filter_ok() {
+        let f = build_filter();
+        assert!(f.is_ok());
+    }
+
+    #[test]
+    fn test_record_metrics_increments_counter() {
+        let counter = IntCounter::new("test_apex_price_updates_total", "test counter").unwrap();
+        let opts = HistogramOpts::new("test_apex_price_latency_ms", "test latency");
+        let hist = HistogramVec::new(opts, &["handler"]).unwrap();
+
+        record_metrics(&(counter.clone(), hist), 12.3);
+        assert_eq!(counter.get(), 1);
+    }
 }

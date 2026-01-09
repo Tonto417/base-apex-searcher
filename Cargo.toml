@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 alloy = { version = "1.3.0", features = ["full"] }
 # Runtime and helper crates
-tokio = { version = "1.49.0", features = ["rt", "macros"] }
+tokio = { version = "1.49.0", features = ["rt", "macros", "signal"] }
 futures-util = "0.3"
 eyre = "0.6"
 # Expose sol types/traits used by the sol! macro
