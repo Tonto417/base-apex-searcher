@@ -1,1 +1,25 @@
-/target
+/target/
+
+# Compiled outputs
+**/*.rlib
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.exe
+
+# Windows debug symbols
+*.pdb
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+
+# Cargo.lock: commit for applications/binaries; ignore for libraries
+# Uncomment the next line if this is a library crate you will publish to crates.io
+# Cargo.lock
